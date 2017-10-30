@@ -56,8 +56,8 @@ obj-$(CONFIG_VIDEO_AM437X_VPFE)		+= am437x/
 
 obj-$(CONFIG_VIDEO_XILINX)		+= xilinx/
 
-obj-$(CONFIG_VIDEO_ROCKCHIP_VPU)	+= rockchip-vpu/
 
 ccflags-y += -I$(srctree)/drivers/media/i2c
 
 obj-$(CONFIG_VIDEO_RK_CIF_ISP10) += rk-isp10/
+obj-$(CONFIG_VIDEO_RKISP1)		+= rockchip-isp1/
