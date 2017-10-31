@@ -29,7 +29,6 @@
 #include <linux/rockchip/pmu.h>
 #include <linux/rockchip/cru.h>
 
-#include "vpu_iommu_ops.h"
 #include "mpp_dev_common.h"
 #include "mpp_service.h"
 
@@ -40,81 +39,65 @@ MODULE_PARM_DESC(mpp_dev_debug, "bit switch for mpp_dev debug information");
 static int mpp_bufid_to_iova(struct rockchip_mpp_dev *mpp, const u8 *tbl,
 			     int size, u32 *reg, struct mpp_ctx *ctx)
 {
-	int hdl;
-	int ret = 0;
-	struct mpp_mem_region *mem_region, *n;
 	int i;
-	int offset = 0;
-	int retval = 0;
 
 	if (!tbl || size <= 0) {
 		mpp_err("input arguments invalidate, table %p, size %d\n",
 			tbl, size);
-		return -1;
+		return -EINVAL;
 	}
 
 	for (i = 0; i < size; i++) {
+		struct mpp_mem_region *mem_region = NULL;
 		int usr_fd = reg[tbl[i]] & 0x3FF;
+		int offset = 0;
 
 		mpp_debug(DEBUG_IOMMU, "reg[%03d] fd = %d\n", tbl[i], usr_fd);
 
-		/* if userspace do not set the fd at this register, skip */
-		if (usr_fd == 0)
-			continue;
-
 		offset = reg[tbl[i]] >> 10;
 
-		mpp_debug(DEBUG_IOMMU, "pos %3d fd %3d offset %10d\n",
-			  tbl[i], usr_fd, offset);
+		mem_region = mpp_fd_to_mem_region(ctx->session->dma, usr_fd);
+		if (IS_ERR(mem_region))
+			return PTR_ERR(mem_region);
 
-		hdl = vpu_iommu_import(mpp->iommu_info, ctx->session, usr_fd);
-		if (hdl < 0) {
-			mpp_err("import dma-buf from fd %d failed, reg[%d]\n",
-				usr_fd, tbl[i]);
-			retval = hdl;
-			goto fail;
-		}
-
-		mem_region = kzalloc(sizeof(*mem_region), GFP_KERNEL);
-
-		if (!mem_region) {
-			vpu_iommu_free(mpp->iommu_info, ctx->session, hdl);
-			retval = -1;
-			goto fail;
-		}
-
-		mem_region->hdl = hdl;
 		mem_region->reg_idx = tbl[i];
 
-		ret = vpu_iommu_map_iommu(mpp->iommu_info, ctx->session,
-					  hdl, (void *)&mem_region->iova,
-					  &mem_region->len);
-
-		if (ret < 0) {
-			mpp_err("reg %d fd %d ion map iommu failed\n",
-				tbl[i], usr_fd);
-			kfree(mem_region);
-			vpu_iommu_free(mpp->iommu_info, ctx->session, hdl);
-			retval = -1;
-			goto fail;
-		}
-
-		reg[tbl[i]] = mem_region->iova + offset;
 		INIT_LIST_HEAD(&mem_region->reg_lnk);
 		list_add_tail(&mem_region->reg_lnk, &ctx->mem_region_list);
+
+
+		mpp_debug(DEBUG_IOMMU, "pos: %3d fd: %3d %pad + offset %10d\n",
+			  tbl[i], usr_fd, &mem_region->iova, offset);
+		reg[tbl[i]] = mem_region->iova + offset;
 	}
 
 	return 0;
+}
 
-fail:
-	list_for_each_entry_safe(mem_region, n,
-				 &ctx->mem_region_list, reg_lnk) {
-		vpu_iommu_free(mpp->iommu_info, ctx->session, mem_region->hdl);
-		list_del_init(&mem_region->reg_lnk);
-		kfree(mem_region);
+void *mpp_fd_to_mem_region(struct mpp_dma_session *dma, int fd) {
+	struct mpp_mem_region *mem_region = NULL;
+	dma_addr_t iova;
+
+	if (fd <= 0 || !dma)
+		return ERR_PTR(-EINVAL);
+
+	iova = mpp_dma_import_fd(dma, fd);
+	if (IS_ERR_VALUE(iova)) {
+		mpp_err("can't access dma-buf %d\n", fd);
+		return ERR_PTR(-EINVAL);
 	}
 
-	return retval;
+	mem_region = kzalloc(sizeof(*mem_region), GFP_KERNEL);
+	if (!mem_region) {
+		mpp_err("allocate memory for iommu memory region failed\n");
+		mpp_dma_release_fd(dma, fd);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	mem_region->hdl = (void *)(long)fd;;
+	mem_region->iova = iova;
+
+	return mem_region;
 }
 
 int mpp_reg_address_translate(struct rockchip_mpp_dev *mpp,
@@ -126,7 +109,9 @@ int mpp_reg_address_translate(struct rockchip_mpp_dev *mpp,
 	const u8 *tbl = trans_info[idx].table;
 	int size = trans_info[idx].count;
 
+	mpp_debug_enter();
 	return mpp_bufid_to_iova(mpp, tbl, size, reg, ctx);
+	mpp_debug_leave();
 }
 
 void mpp_translate_extra_info(struct mpp_ctx *ctx,
@@ -231,9 +216,7 @@ void mpp_dev_common_ctx_deinit(struct rockchip_mpp_dev *mpp,
 	/* release memory region attach to this registers table. */
 	list_for_each_entry_safe(mem_region, n,
 				 &ctx->mem_region_list, reg_lnk) {
-		vpu_iommu_unmap_iommu(mpp->iommu_info, ctx->session,
-				      mem_region->hdl);
-		vpu_iommu_free(mpp->iommu_info, ctx->session, mem_region->hdl);
+		mpp_dma_release_fd(ctx->session->dma, (long)mem_region->hdl);
 		list_del_init(&mem_region->reg_lnk);
 		kfree(mem_region);
 	}
@@ -273,17 +256,8 @@ static void mpp_dev_reset(struct rockchip_mpp_dev *mpp)
 
 	mpp->variant->reset(mpp);
 
-	if (!mpp->iommu_enable)
-		return;
-
-	if (test_bit(MMU_ACTIVATED, &mpp->state)) {
-		if (atomic_read(&mpp->enabled))
-			vpu_iommu_detach(mpp->iommu_info);
-		else
-			WARN_ON(!atomic_read(&mpp->enabled));
-
-		vpu_iommu_attach(mpp->iommu_info);
-	}
+	mpp_iommu_detach(mpp->iommu_info);
+	mpp_iommu_attach(mpp->iommu_info);
 
 	mpp_debug_leave();
 }
@@ -305,10 +279,6 @@ void mpp_dev_power_on(struct rockchip_mpp_dev *mpp)
 	pr_info("%s: power on\n", dev_name(mpp->dev));
 
 	mpp->variant->power_on(mpp);
-	if (mpp->iommu_enable) {
-		set_bit(MMU_ACTIVATED, &mpp->state);
-		vpu_iommu_attach(mpp->iommu_info);
-	}
 	atomic_add(1, &mpp->power_on_cnt);
 	wake_lock(&mpp->wake_lock);
 }
@@ -331,10 +301,6 @@ void mpp_dev_power_off(struct rockchip_mpp_dev *mpp)
 
 	pr_info("%s: power off...", dev_name(mpp->dev));
 
-	if (mpp->iommu_enable) {
-		clear_bit(MMU_ACTIVATED, &mpp->state);
-		vpu_iommu_detach(mpp->iommu_info);
-	}
 	mpp->variant->power_off(mpp);
 
 	atomic_add(1, &mpp->power_off_cnt);
@@ -626,8 +592,7 @@ static long compat_mpp_dev_ioctl(struct file *file, unsigned int cmd,
 
 static int mpp_dev_open(struct inode *inode, struct file *filp)
 {
-	struct rockchip_mpp_dev *mpp =
-				       container_of(inode->i_cdev,
+	struct rockchip_mpp_dev *mpp = container_of(inode->i_cdev,
 						    struct rockchip_mpp_dev,
 						    cdev);
 	struct mpp_session *session;
@@ -648,6 +613,7 @@ static int mpp_dev_open(struct inode *inode, struct file *filp)
 	INIT_LIST_HEAD(&session->list_session);
 	init_waitqueue_head(&session->wait);
 	atomic_set(&session->task_running, 0);
+	session->dma = mpp_dma_session_create(mpp->dev);
 	mpp_srv_lock(mpp->srv);
 	list_add_tail(&session->list_session, &mpp->srv->session);
 	filp->private_data = (void *)session;
@@ -683,6 +649,7 @@ static int mpp_dev_release(struct inode *inode, struct file *filp)
 	/* remove this filp from the asynchronusly notified filp's */
 	list_del_init(&session->list_session);
 	mpp_dev_session_clear(mpp, session);
+	mpp_dma_destroy_session(session->dma);
 	filp->private_data = NULL;
 	mpp_srv_unlock(mpp->srv);
 	if (mpp->ops->release)
@@ -748,107 +715,13 @@ static irqreturn_t mpp_isr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-#ifdef CONFIG_IOMMU_API
-static inline void platform_set_sysmmu(struct device *iommu,
-				       struct device *dev)
-{
-	dev->archdata.iommu = iommu;
-}
-#else
-static inline void platform_set_sysmmu(struct device *iommu,
-				       struct device *dev)
-{
-}
-#endif
-
-static int mpp_sysmmu_fault_hdl(struct device *dev,
-				enum rk_iommu_inttype itype,
-				unsigned long pgtable_base,
-				unsigned long fault_addr, unsigned int status)
-{
-	struct platform_device *pdev;
-	struct rockchip_mpp_dev *mpp;
-	struct mpp_ctx *ctx;
-
-	mpp_debug_enter();
-
-	if (!dev) {
-		mpp_err("invalid NULL dev\n");
-		return 0;
-	}
-
-	pdev = container_of(dev, struct platform_device, dev);
-	if (!pdev) {
-		mpp_err("invalid NULL platform_device\n");
-		return 0;
-	}
-
-	mpp = platform_get_drvdata(pdev);
-	if (!mpp || !mpp->srv) {
-		mpp_err("invalid mpp_dev or mpp_srv\n");
-		return 0;
-	}
-
-	ctx = mpp_srv_get_current_ctx(mpp->srv);
-	if (ctx) {
-		struct mpp_mem_region *mem, *n;
-		int i = 0;
-
-		mpp_err("mpp, fault addr 0x%08lx\n", fault_addr);
-		if (!list_empty(&ctx->mem_region_list)) {
-			list_for_each_entry_safe(mem, n, &ctx->mem_region_list,
-						 reg_lnk) {
-				mpp_err("mpp, reg[%02u] mem[%02d] 0x%lx %lx\n",
-					mem->reg_idx, i, mem->iova, mem->len);
-				i++;
-			}
-		} else {
-			mpp_err("no memory region mapped\n");
-		}
-
-		if (ctx->mpp) {
-			struct rockchip_mpp_dev *mpp = ctx->mpp;
-
-			mpp_err("current errror register set:\n");
-			mpp_dump_reg(mpp->reg_base, mpp->variant->reg_len);
-		}
-
-		if (mpp->variant->reset)
-			mpp->variant->reset(mpp);
-	}
-
-	mpp_debug_leave();
-
-	return 0;
-}
-
-static struct device *rockchip_get_sysmmu_dev(const char *compt)
-{
-	struct device_node *dn = NULL;
-	struct platform_device *pd = NULL;
-	struct device *ret = NULL;
-
-	dn = of_find_compatible_node(NULL, NULL, compt);
-	if (!dn) {
-		pr_err("can't find device node %s \r\n", compt);
-		return NULL;
-	}
-
-	pd = of_find_device_by_node(dn);
-	if (!pd) {
-		pr_err("can't find platform device in device node %s\n", compt);
-		return  NULL;
-	}
-	ret = &pd->dev;
-
-	return ret;
-}
-
 #if defined(CONFIG_OF)
 static const struct of_device_id mpp_dev_dt_ids[] = {
+#if 0
 	{ .compatible = "rockchip,rkvenc", .data = &rkvenc_variant, },
 	{ .compatible = "rockchip,vepu", .data = &vepu_variant, },
 	{ .compatible = "rockchip,h265e", .data = &h265e_variant, },
+#endif
 	{ },
 };
 #endif
@@ -862,13 +735,12 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	struct rockchip_mpp_dev *mpp = NULL;
 	const struct of_device_id *match;
 	const struct rockchip_mpp_dev_variant *variant;
-	struct device_node *srv_np, *mmu_np;
-	struct platform_device *srv_pdev;
+	struct device_node *srv_np = NULL;
+	struct platform_device *srv_pdev = NULL;
 	struct resource *res = NULL;
-	struct mpp_session *session;
-	int allocator_type;
+	struct mpp_session *session = NULL;
 
-	pr_info("probe device %s\n", dev_name(dev));
+	dev_dbg(dev, "probing device\n");
 
 	match = of_match_node(mpp_dev_dt_ids, dev->of_node);
 	variant = match->data;
@@ -896,7 +768,6 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	mpp->last.tv64 = 0;
 
 	of_property_read_string(np, "name", (const char **)&name);
-	of_property_read_u32(np, "iommu_enabled", &mpp->iommu_enable);
 
 	if (mpp->srv->reg_base == 0) {
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -921,43 +792,7 @@ static int mpp_dev_probe(struct platform_device *pdev)
 			goto err;
 		}
 	} else {
-		dev_info(dev, "No interrupt resource found\n");
-	}
-
-	mmu_np = of_parse_phandle(np, "iommus", 0);
-	if (mmu_np) {
-		struct platform_device *pd = NULL;
-
-		pd = of_find_device_by_node(mmu_np);
-		mpp->mmu_dev = &pd->dev;
-		if (!mpp->mmu_dev) {
-			mpp->iommu_enable = false;
-			dev_err(dev, "get iommu dev failed");
-		}
-	} else {
-		mpp->mmu_dev =
-			rockchip_get_sysmmu_dev(mpp->variant->mmu_dev_dts_name);
-		if (mpp->mmu_dev) {
-			platform_set_sysmmu(mpp->mmu_dev, dev);
-			rockchip_iovmm_set_fault_handler(dev,
-							 mpp_sysmmu_fault_hdl);
-		} else {
-			dev_err(dev,
-				"get iommu dev %s failed, set iommu_enable to false\n",
-				mpp->variant->mmu_dev_dts_name);
-			mpp->iommu_enable = false;
-		}
-	}
-
-	dev_info(dev, "try to get iommu dev %p\n",
-		 mpp->mmu_dev);
-
-	of_property_read_u32(np, "allocator", &allocator_type);
-	mpp->iommu_info = vpu_iommu_info_create(dev, mpp->mmu_dev,
-						allocator_type);
-	if (IS_ERR(mpp->iommu_info)) {
-		dev_err(dev, "failed to create ion client for mpp ret %ld\n",
-			PTR_ERR(mpp->iommu_info));
+		dev_err(dev, "No interrupt resource found\n");
 	}
 
 	/*
@@ -982,7 +817,13 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	if (ret)
 		goto err;
 
-	dev_info(dev, "resource ready, register device\n");
+	mpp->iommu_info = mpp_iommu_probe(dev);
+	if (IS_ERR(mpp->iommu_info)) {
+		dev_err(dev, "failed to attach mpp dev ret %ld\n",
+			PTR_ERR(mpp->iommu_info));
+	}
+
+	dev_dbg(dev, "resource ready, register device\n");
 	/* create device node */
 	ret = alloc_chrdev_region(&mpp->dev_t, 0, 1, name);
 	if (ret) {
@@ -1024,8 +865,7 @@ static int mpp_dev_remove(struct platform_device *pdev)
 
 	mpp->variant->hw_remove(mpp);
 
-	vpu_iommu_clear(mpp->iommu_info, session);
-	vpu_iommu_destroy(mpp->iommu_info);
+	mpp_iommu_remove(mpp->iommu_info);
 	kfree(session);
 
 	mpp_srv_lock(mpp->srv);

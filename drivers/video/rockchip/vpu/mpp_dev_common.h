@@ -19,13 +19,13 @@
 
 #include <linux/cdev.h>
 #include <linux/dma-buf.h>
-#include <linux/rockchip_ion.h>
-#include <linux/rockchip-iovmm.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 #include <linux/wakelock.h>
 
 #include <video/rk_vpu_service.h>
+
+#include "mpp_iommu_dma.h"
 
 extern int mpp_dev_debug;
 
@@ -111,17 +111,12 @@ struct mpp_mem_region {
 	struct list_head reg_lnk;
 	struct list_head session_lnk;
 	/* virtual address for iommu */
-	unsigned long iova;
+	dma_addr_t iova;
 	unsigned long len;
 	u32 reg_idx;
-	int hdl;
+	void *hdl;
 };
 
-/**
- * struct for process register set
- *
- * @author ChenHengming (2011-5-4)
- */
 struct mpp_ctx {
 	/* context belong to */
 	struct rockchip_mpp_dev *mpp;
@@ -136,10 +131,6 @@ struct mpp_ctx {
 
 	/* record context running start time */
 	struct timeval start;
-};
-
-enum vpu_ctx_state {
-	MMU_ACTIVATED	= BIT(0),
 };
 
 struct extra_info_elem {
@@ -184,12 +175,9 @@ struct rockchip_mpp_dev {
 	struct device *dev;
 
 	unsigned long state;
-	struct vpu_iommu_info *iommu_info;
+	struct mpp_iommu_info *iommu_info;
 
 	const struct rockchip_mpp_dev_variant *variant;
-
-	struct device *mmu_dev;
-	u32 iommu_enable;
 
 	struct wake_lock wake_lock;
 	struct delayed_work power_off_work;
@@ -236,6 +224,8 @@ struct mpp_dev_ops {
 
 void mpp_dump_reg(void __iomem *regs, int count);
 void mpp_dump_reg_mem(u32 *regs, int count);
+
+void *mpp_fd_to_mem_region(struct mpp_dma_session *dma, int fd);
 int mpp_reg_address_translate(struct rockchip_mpp_dev *data,
 			      u32 *reg,
 			      struct mpp_ctx *ctx,
