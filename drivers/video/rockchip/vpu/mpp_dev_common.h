@@ -284,5 +284,7 @@ static inline void mpp_time_diff(struct mpp_ctx *ctx)
 extern const struct rockchip_mpp_dev_variant rkvenc_variant;
 extern const struct rockchip_mpp_dev_variant vepu_variant;
 extern const struct rockchip_mpp_dev_variant h265e_variant;
+extern const struct rockchip_mpp_dev_variant rkvdec_variant;
 
+void rockchip_mpp_rkvdec_free_ctx(struct mpp_ctx *ictx);
 #endif

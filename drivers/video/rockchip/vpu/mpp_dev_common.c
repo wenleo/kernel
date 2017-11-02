@@ -66,7 +66,6 @@ static int mpp_bufid_to_iova(struct rockchip_mpp_dev *mpp, const u8 *tbl,
 		INIT_LIST_HEAD(&mem_region->reg_lnk);
 		list_add_tail(&mem_region->reg_lnk, &ctx->mem_region_list);
 
-
 		mpp_debug(DEBUG_IOMMU, "pos: %3d fd: %3d %pad + offset %10d\n",
 			  tbl[i], usr_fd, &mem_region->iova, offset);
 		reg[tbl[i]] = mem_region->iova + offset;
@@ -223,7 +222,8 @@ void mpp_dev_common_ctx_deinit(struct rockchip_mpp_dev *mpp,
 		kfree(mem_region);
 	}
 
-	kfree(ctx);
+	//kfree(ctx);
+	rockchip_mpp_rkvdec_free_ctx(ctx);
 }
 
 static inline void mpp_queue_power_off_work(struct rockchip_mpp_dev *mpp)
@@ -722,6 +722,7 @@ static const struct of_device_id mpp_dev_dt_ids[] = {
 	{ .compatible = "rockchip,vepu", .data = &vepu_variant, },
 	{ .compatible = "rockchip,h265e", .data = &h265e_variant, },
 #endif
+	{ .compatible = "rockchip,rkvdec-v1", .data = &rkvdec_variant},
 	{ },
 };
 #endif
@@ -796,8 +797,6 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	} else {
 		dev_err(dev, "No interrupt resource found\n");
 	}
-
-
 	/*
 	 * this session is global session, each dev
 	 * only has one global session, and will be
