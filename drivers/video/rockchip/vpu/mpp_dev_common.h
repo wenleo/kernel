@@ -51,6 +51,7 @@ extern int mpp_dev_debug;
 #define DEBUG_TIMING				0x00000100
 #define DEBUG_TASK_INFO				0x00000200
 #define DEBUG_DUMP_ERR_REG			0x00000400
+#define DEBUG_LINK_TABLE			0x00000800
 
 #define DEBUG_SET_REG				0x00001000
 #define DEBUG_GET_REG				0x00002000
@@ -234,7 +235,7 @@ void mpp_translate_extra_info(struct mpp_ctx *ctx,
 			      struct extra_info_for_iommu *ext_inf,
 			      u32 *reg);
 
-int mpp_dev_common_ctx_init(struct rockchip_mpp_dev *mpp, struct mpp_ctx *cfg);
+int mpp_dev_common_ctx_init(struct mpp_session *mpp, struct mpp_ctx *cfg);
 void mpp_dev_common_ctx_deinit(struct rockchip_mpp_dev *mpp,
 			       struct mpp_ctx *ctx);
 void mpp_dev_power_on(struct rockchip_mpp_dev *mpp);

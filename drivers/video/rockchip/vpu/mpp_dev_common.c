@@ -21,6 +21,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/of_irq.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/slab.h>
@@ -150,12 +151,13 @@ void mpp_dump_reg_mem(u32 *regs, int count)
 		pr_info("reg[%03d]: %08x\n", i, regs[i]);
 }
 
-int mpp_dev_common_ctx_init(struct rockchip_mpp_dev *mpp, struct mpp_ctx *cfg)
+int mpp_dev_common_ctx_init(struct mpp_session *mpp, struct mpp_ctx *cfg)
 {
 	INIT_LIST_HEAD(&cfg->session_link);
 	INIT_LIST_HEAD(&cfg->status_link);
 	INIT_LIST_HEAD(&cfg->mem_region_list);
 
+	cfg->session = mpp;
 	return 0;
 }
 
@@ -279,6 +281,7 @@ void mpp_dev_power_on(struct rockchip_mpp_dev *mpp)
 	pr_info("%s: power on\n", dev_name(mpp->dev));
 
 	mpp->variant->power_on(mpp);
+	pm_runtime_get_sync(mpp->dev);
 	atomic_add(1, &mpp->power_on_cnt);
 	wake_lock(&mpp->wake_lock);
 }
@@ -300,11 +303,11 @@ void mpp_dev_power_off(struct rockchip_mpp_dev *mpp)
 	}
 
 	pr_info("%s: power off...", dev_name(mpp->dev));
-
 	mpp->variant->power_off(mpp);
 
 	atomic_add(1, &mpp->power_off_cnt);
 	wake_unlock(&mpp->wake_lock);
+	pm_runtime_put(mpp->dev);
 	pr_info("done\n");
 }
 
@@ -435,11 +438,8 @@ static int mpp_dev_wait_result(struct mpp_session *session,
 static long mpp_dev_ioctl(struct file *filp, unsigned int cmd,
 			  unsigned long arg)
 {
-	struct rockchip_mpp_dev *mpp =
-			container_of(filp->f_path.dentry->d_inode->i_cdev,
-				     struct rockchip_mpp_dev,
-				     cdev);
 	struct mpp_session *session = (struct mpp_session *)filp->private_data;
+	struct rockchip_mpp_dev *mpp = session->mpp;
 
 	mpp_debug_enter();
 	if (!session)
@@ -780,6 +780,8 @@ static int mpp_dev_probe(struct platform_device *pdev)
 		mpp->reg_base = mpp->srv->reg_base;
 	}
 
+	pm_runtime_enable(dev);
+
 	mpp->irq = platform_get_irq(pdev, 0);
 	if (mpp->irq > 0) {
 		ret = devm_request_threaded_irq(dev, mpp->irq,
@@ -794,6 +796,7 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	} else {
 		dev_err(dev, "No interrupt resource found\n");
 	}
+
 
 	/*
 	 * this session is global session, each dev
@@ -816,6 +819,8 @@ static int mpp_dev_probe(struct platform_device *pdev)
 	ret = mpp->variant->hw_probe(mpp);
 	if (ret)
 		goto err;
+
+	mpp_dev_power_on(mpp);
 
 	mpp->iommu_info = mpp_iommu_probe(dev);
 	if (IS_ERR(mpp->iommu_info)) {
@@ -877,6 +882,8 @@ static int mpp_dev_remove(struct platform_device *pdev)
 	device_destroy(mpp->srv->cls, mpp->dev_t);
 	cdev_del(&mpp->cdev);
 	unregister_chrdev_region(mpp->dev_t, 1);
+
+	pm_runtime_disable(&pdev->dev);
 
 	return 0;
 }
