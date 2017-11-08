@@ -14,4 +14,11 @@ config ROCKCHIP_MPP_DEVICE
 	help
 	  rockchip mpp module.
 
+config ROCKCHIP_MPP_RKVDEC_DEVICE
+	tristate "ROCKCHIP MPP rkvdec device driver"
+	depends on ROCKCHIP_MPP_DEVICE
+	default n
+	help
+	  rockchip mpp module.
+
 endmenu

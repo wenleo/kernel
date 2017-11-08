@@ -1,7 +1,5 @@
 /**
- * Copyright (C) 2016 Fuzhou Rockchip Electronics Co., Ltd
- * author: chenhengming chm@rock-chips.com
- *	   Alpha Lin, alpha.lin@rock-chips.com
+ * Copyright (C) 2016 - 2017 Fuzhou Rockchip Electronics Co., Ltd
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -14,98 +12,37 @@
  *
  */
 
-#ifndef __ROCKCHIP_MPP_DEV_COMMON_H
-#define __ROCKCHIP_MPP_DEV_COMMON_H
+#ifndef _ROCKCHIP_MPP_DEV_COMMON_H_
+#define _ROCKCHIP_MPP_DEV_COMMON_H_
 
 #include <linux/cdev.h>
 #include <linux/dma-buf.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 #include <linux/wakelock.h>
+#include <linux/reset.h>
 
-#include <video/rk_vpu_service.h>
-
-#include "mpp_iommu_dma.h"
-
-extern int mpp_dev_debug;
+#define MPP_DEVICE_NAME				"mpp_device"
 
 #define MPP_IOC_CUSTOM_BASE			0x1000
 
-/*
- * debug flag usage:
- * +------+-------------------+
- * | 8bit |      24bit        |
- * +------+-------------------+
- *  0~23 bit is for different information type
- * 24~31 bit is for information print format
- */
-
-#define DEBUG_POWER				0x00000001
-#define DEBUG_CLOCK				0x00000002
-#define DEBUG_IRQ_STATUS			0x00000004
-#define DEBUG_IOMMU				0x00000008
-#define DEBUG_IOCTL				0x00000010
-#define DEBUG_FUNCTION				0x00000020
-#define DEBUG_REGISTER				0x00000040
-#define DEBUG_EXTRA_INFO			0x00000080
-#define DEBUG_TIMING				0x00000100
-#define DEBUG_TASK_INFO				0x00000200
-#define DEBUG_DUMP_ERR_REG			0x00000400
-#define DEBUG_LINK_TABLE			0x00000800
-
-#define DEBUG_SET_REG				0x00001000
-#define DEBUG_GET_REG				0x00002000
-#define DEBUG_PPS_FILL				0x00004000
-#define DEBUG_IRQ_CHECK				0x00008000
-#define DEBUG_CACHE_32B				0x00010000
-
-#define DEBUG_RESET				0x00020000
-
-#define PRINT_FUNCTION				0x80000000
-#define PRINT_LINE				0x40000000
-
-#define DEBUG
-#ifdef DEBUG
-#define mpp_debug_func(type, fmt, args...)			\
-	do {							\
-		if (unlikely(mpp_dev_debug & type)) {		\
-			pr_info("%s:%d: " fmt,			\
-				 __func__, __LINE__, ##args);	\
-		}						\
-	} while (0)
-#define mpp_debug(type, fmt, args...)				\
-	do {							\
-		if (unlikely(mpp_dev_debug & type)) {		\
-			pr_info(fmt, ##args);			\
-		}						\
-	} while (0)
-#else
-#define mpp_debug_func(level, fmt, args...)
-#define mpp_debug(level, fmt, args...)
-#endif
-
-#define mpp_debug_enter() mpp_debug_func(DEBUG_FUNCTION, "enter\n")
-#define mpp_debug_leave() mpp_debug_func(DEBUG_FUNCTION, "leave\n")
-
-#define mpp_err(fmt, args...)				\
-		pr_err("%s:%d: " fmt, __func__, __LINE__, ##args)
+#define EXTRA_INFO_MAGIC			0x4C4A46
 
 struct mpp_trans_info {
 	const int count;
 	const char * const table;
 };
 
-enum RKVENC_MODE {
-	RKVENC_MODE_NONE,
-	RKVENC_MODE_ONEFRAME,
-	RKVENC_MODE_LINKTABLE_FIX,
-	RKVENC_MODE_LINKTABLE_UPDATE,
-	RKVENC_MODE_NUM
+struct extra_info_elem {
+	u32 index;
+	u32 offset;
 };
 
-struct rockchip_mpp_dev;
-struct mpp_service;
-struct mpp_ctx;
+struct extra_info_for_iommu {
+	u32 magic;
+	u32 cnt;
+	struct extra_info_elem elem[20];
+};
 
 struct mpp_mem_region {
 	struct list_head srv_lnk;
@@ -118,68 +55,100 @@ struct mpp_mem_region {
 	void *hdl;
 };
 
-struct mpp_ctx {
-	/* context belong to */
+/* Definition in dma file */
+struct mpp_dma_session;
+/* Definition in mpp service file */
+struct mpp_service;
+
+struct rockchip_mpp_dev;
+
+struct mpp_session {
+	struct mpp_dma_session *dma;
+	/* a linked list of data so we can access them for debugging */
+	struct list_head list_session;
+	/* the session related device private data */
 	struct rockchip_mpp_dev *mpp;
+	struct list_head done;
+	wait_queue_head_t wait;
+	pid_t pid;
+	atomic_t task_running;
+};
+
+/* The context for the a task */
+struct mpp_task {
+	/* context belong to */
 	struct mpp_session *session;
 
 	/* link to service session */
 	struct list_head session_link;
 	/* link to service list */
 	struct list_head status_link;
-
+	/* The DMA buffer used in this task */
 	struct list_head mem_region_list;
+	struct work_struct work;
 
 	/* record context running start time */
 	struct timeval start;
 };
 
-struct extra_info_elem {
-	u32 index;
-	u32 offset;
-};
-
-#define EXTRA_INFO_MAGIC	0x4C4A46
-
-struct extra_info_for_iommu {
-	u32 magic;
-	u32 cnt;
-	struct extra_info_elem elem[20];
-};
-
-struct rockchip_mpp_dev_variant {
-	u32 data_len;
+struct mpp_dev_variant {
 	u32 reg_len;
 	struct mpp_trans_info *trans_info;
-	char *mmu_dev_dts_name;
+	const char *node_name;
+};
 
-	int (*hw_probe)(struct rockchip_mpp_dev *mpp);
-	void (*hw_remove)(struct rockchip_mpp_dev *mpp);
-	void (*power_on)(struct rockchip_mpp_dev *mpp);
-	void (*power_off)(struct rockchip_mpp_dev *mpp);
-	int (*reset)(struct rockchip_mpp_dev *mpp);
+/**
+ * struct mpp_dev_ops - context specific operations for mpp_device
+ * The task part
+ * @prepare	Check HW status for determining run next task or not.
+ * @run		Start a single {en,de}coding run. Set registers to hardware.
+ * @finish	Read back processing results and additional data from hardware.
+ * @result	Read status to userspace.
+ * @free_task	Release the resource allocate during init.
+ * The device part
+ * @power_on
+ * @power_off
+ * @reset
+ */
+struct mpp_dev_ops {
+	/* size: in bytes, data sent from userspace, length in bytes */
+	void *(*alloc_task)(struct mpp_session *session,
+			    void __user *src, u32 size);
+	int (*prepare)(struct rockchip_mpp_dev *mpp_dev, struct mpp_task *task);
+	int (*run)(struct rockchip_mpp_dev *mpp_dev, struct mpp_task *task);
+	int (*finish)(struct rockchip_mpp_dev *mpp_dev, struct mpp_task *task);
+	int (*result)(struct rockchip_mpp_dev *mpp_dev, struct mpp_task *task,
+		      u32 __user *dst, u32 size);
+	int (*free_task)(struct mpp_session *session,
+			    struct mpp_task *task);
+	/* Hardware only operations */
+	void (*power_on)(struct rockchip_mpp_dev *mpp_dev);
+	void (*power_off)(struct rockchip_mpp_dev *mpp_dev);
+	int (*reset)(struct rockchip_mpp_dev *mpp_dev);
 };
 
 struct rockchip_mpp_dev {
+	struct device *dev;
+
+	const struct mpp_dev_variant *variant;
 	struct mpp_dev_ops *ops;
 
-	struct cdev cdev;
-	dev_t dev_t;
-	struct device *child_dev;
-
-	int irq;
-	struct mpp_service *srv;
-
 	void __iomem *reg_base;
-	struct list_head lnk_service;
+	int irq;
+	struct workqueue_struct *irq_workq;
 
-	struct device *dev;
+	struct cdev mpp_cdev;
+	dev_t dev_id;
+
+	/* MPP Service */
+	struct mpp_service *srv;
+	struct list_head lnk_service;
 
 	unsigned long state;
 	struct mpp_iommu_info *iommu_info;
 
-	const struct rockchip_mpp_dev_variant *variant;
 
+	/* Android Power locker */
 	struct wake_lock wake_lock;
 	struct delayed_work power_off_work;
 	/* record previous power-on time */
@@ -191,68 +160,62 @@ struct rockchip_mpp_dev {
 	atomic_t reset_request;
 };
 
-/**
- * struct mpp_dev_ops - context specific operations for mpp_device
- *
- * @init	Prepare for registers file for specific hardware.
- * @prepare	Check HW status for determining run next task or not.
- * @run		Start a single {en,de}coding run. Set registers to hardware.
- * @done	Read back processing results and additional data from hardware.
- * @result	Read status to userspace.
- * @deinit	Release the resource allocate during init.
- * @ioctl	ioctl for special HW besides the common ioctl.
- * @irq		interrupt service for specific hardware.
- * @open	a specific instance open operation for hardware.
- * @release	a specific instance release operation for hardware.
- */
-struct mpp_dev_ops {
-	/* size: in bytes, data sent from userspace, length in bytes */
-	struct mpp_ctx *(*init)(struct rockchip_mpp_dev *mpp,
-				struct mpp_session *session,
-				void __user *src, u32 size);
-	int (*prepare)(struct rockchip_mpp_dev *mpp);
-	int (*run)(struct rockchip_mpp_dev *mpp);
-	int (*done)(struct rockchip_mpp_dev *mpp);
-	int (*irq)(struct rockchip_mpp_dev *mpp);
-	int (*result)(struct rockchip_mpp_dev *mpp, struct mpp_ctx *ctx,
-		      u32 __user *dst);
-	void (*deinit)(struct rockchip_mpp_dev *mpp);
-	long (*ioctl)(struct mpp_session *isession,
-		      unsigned int cmd, unsigned long arg);
-	struct mpp_session *(*open)(struct rockchip_mpp_dev *mpp);
-	void (*release)(struct mpp_session *session);
-};
-
-void mpp_dump_reg(void __iomem *regs, int count);
-void mpp_dump_reg_mem(u32 *regs, int count);
-
-void *mpp_fd_to_mem_region(struct mpp_dma_session *dma, int fd);
+struct mpp_mem_region *mpp_dev_task_attach_fd(struct mpp_task *task, int fd);
 int mpp_reg_address_translate(struct rockchip_mpp_dev *data,
-			      u32 *reg,
-			      struct mpp_ctx *ctx,
-			      int idx);
-void mpp_translate_extra_info(struct mpp_ctx *ctx,
+			      struct mpp_task *task, int fmt, u32 *reg);
+void mpp_translate_extra_info(struct mpp_task *task,
 			      struct extra_info_for_iommu *ext_inf,
 			      u32 *reg);
 
-int mpp_dev_common_ctx_init(struct mpp_session *mpp, struct mpp_ctx *cfg);
-void mpp_dev_common_ctx_deinit(struct rockchip_mpp_dev *mpp,
-			       struct mpp_ctx *ctx);
+int mpp_dev_task_init(struct mpp_session *session, struct mpp_task *task);
+void mpp_dev_task_finish(struct mpp_session *session, struct mpp_task *task);
+void mpp_dev_task_finalize(struct mpp_session *session, struct mpp_task *task);
+
 void mpp_dev_power_on(struct rockchip_mpp_dev *mpp);
 void mpp_dev_power_off(struct rockchip_mpp_dev *mpp);
 bool mpp_dev_is_power_on(struct rockchip_mpp_dev *mpp);
 
+void mpp_dump_reg(void __iomem *regs, int count);
+void mpp_dump_reg_mem(u32 *regs, int count);
+
+/* It can handle the default ioctl */
+long mpp_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+#ifdef CONFIG_COMPAT
+long mpp_dev_compat_ioctl(struct file *filp, unsigned int cmd,
+			  unsigned long arg);
+#endif
+
+int mpp_dev_common_probe(struct rockchip_mpp_dev *mpp_dev,
+			 struct platform_device *pdev,
+			 struct mpp_dev_ops *ops);
+int mpp_dev_register_node(struct rockchip_mpp_dev *mpp_dev,
+			  const char *node_name, const void *fops);
+int mpp_dev_common_remove(struct rockchip_mpp_dev *mpp_dev);
+
+static inline void safe_reset(struct reset_control *rst)
+{
+	if (rst)
+		reset_control_assert(rst);
+}
+
+static inline void safe_unreset(struct reset_control *rst)
+{
+	if (rst)
+		reset_control_deassert(rst);
+}
+
+#ifdef _ROCKCHIP_MPP_DEBUG_H_
 static inline void mpp_write_relaxed(struct rockchip_mpp_dev *mpp,
 				     u32 val, u32 reg)
 {
-	mpp_debug(DEBUG_SET_REG, "MARK: set reg[%03d]: %08x\n", reg / 4, val);
+	mpp_debug(DEBUG_SET_REG, "set reg[%03d]: %08x\n", reg / 4, val);
 	writel_relaxed(val, mpp->reg_base + reg);
 }
 
 static inline void mpp_write(struct rockchip_mpp_dev *mpp,
 			     u32 val, u32 reg)
 {
-	mpp_debug(DEBUG_SET_REG, "MARK: set reg[%03d]: %08x\n", reg / 4, val);
+	mpp_debug(DEBUG_SET_REG, "write reg[%03d]: %08x\n", reg / 4, val);
 	writel(val, mpp->reg_base + reg);
 }
 
@@ -260,31 +223,52 @@ static inline u32 mpp_read(struct rockchip_mpp_dev *mpp, u32 reg)
 {
 	u32 val = readl(mpp->reg_base + reg);
 
-	mpp_debug(DEBUG_GET_REG, "MARK: get reg[%03d] 0x%x: %08x\n", reg / 4,
+	mpp_debug(DEBUG_GET_REG, "get reg[%03d] 0x%x: %08x\n", reg / 4,
 		  reg, val);
 	return val;
 }
 
-static inline void mpp_time_record(struct mpp_ctx *ctx)
+static inline void mpp_time_record(struct mpp_task *task)
 {
-	if (unlikely(mpp_dev_debug & DEBUG_TIMING) && ctx)
-		do_gettimeofday(&ctx->start);
+	if (unlikely(debug & DEBUG_TIMING) && task)
+		do_gettimeofday(&task->start);
 }
 
-static inline void mpp_time_diff(struct mpp_ctx *ctx)
+static inline void mpp_time_diff(struct mpp_task *task)
 {
 	struct timeval end;
 
 	do_gettimeofday(&end);
 	mpp_debug(DEBUG_TIMING, "consume: %ld us\n",
-		  (end.tv_sec  - ctx->start.tv_sec)  * 1000000 +
-		  (end.tv_usec - ctx->start.tv_usec));
+		  (end.tv_sec  - task->start.tv_sec)  * 1000000 +
+		  (end.tv_usec - task->start.tv_usec));
 }
 
-extern const struct rockchip_mpp_dev_variant rkvenc_variant;
-extern const struct rockchip_mpp_dev_variant vepu_variant;
-extern const struct rockchip_mpp_dev_variant h265e_variant;
-extern const struct rockchip_mpp_dev_variant rkvdec_variant;
+#else
+static inline void mpp_write_relaxed(struct rockchip_mpp_dev *mpp,
+				     u32 val, u32 reg)
+{
+	writel_relaxed(val, mpp->reg_base + reg);
+}
 
-void rockchip_mpp_rkvdec_free_ctx(struct mpp_ctx *ictx);
+static inline void mpp_write(struct rockchip_mpp_dev *mpp,
+			     u32 val, u32 reg)
+{
+	writel(val, mpp->reg_base + reg);
+}
+
+static inline u32 mpp_read(struct rockchip_mpp_dev *mpp, u32 reg)
+{
+	return 0;
+}
+
+static inline void mpp_time_record(struct mpp_task *task)
+{
+}
+
+static inline void mpp_time_diff(struct mpp_task *task)
+{
+}
+#endif
+
 #endif
