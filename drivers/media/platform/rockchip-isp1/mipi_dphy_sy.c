@@ -47,6 +47,11 @@
 #include <media/v4l2-subdev.h>
 #include "mipi_dphy_sy.h"
 
+/*
+ * The default maximum bit-rate per lane in Mbps, if the
+ * source subdev does not provide V4L2_CID_LINK_FREQ.
+ */
+#define CSI2_DEFAULT_RATE_MBPS	999
 
 #define RK3288_GRF_SOC_CON6	0x025c
 #define RK3288_GRF_SOC_CON8	0x0264
@@ -276,23 +281,22 @@ static int mipidphy_get_sensor_data_rate(struct v4l2_subdev *sd)
 
 	link_freq = v4l2_ctrl_find(sensor_sd->ctrl_handler, V4L2_CID_LINK_FREQ);
 	if (!link_freq) {
-		v4l2_warn(sd, "No pixel rate control in subdev\n");
-		return -EPIPE;
-	}
+		priv->data_rate_mbps = CSI2_DEFAULT_RATE_MBPS;
+	} else {
+		qm.index = v4l2_ctrl_g_ctrl(link_freq);
+		ret = v4l2_querymenu(sensor_sd->ctrl_handler, &qm);
+		if (ret < 0) {
+			v4l2_err(sd, "Failed to get menu item\n");
+			return ret;
+		}
 
-	qm.index = v4l2_ctrl_g_ctrl(link_freq);
-	ret = v4l2_querymenu(sensor_sd->ctrl_handler, &qm);
-	if (ret < 0) {
-		v4l2_err(sd, "Failed to get menu item\n");
-		return ret;
+		if (!qm.value) {
+			v4l2_err(sd, "Invalid link_freq\n");
+			return -EINVAL;
+		}
+		priv->data_rate_mbps = qm.value * 2;
+		do_div(priv->data_rate_mbps, 1000 * 1000);
 	}
-
-	if (!qm.value) {
-		v4l2_err(sd, "Invalid link_freq\n");
-		return -EINVAL;
-	}
-	priv->data_rate_mbps = qm.value * 2;
-	do_div(priv->data_rate_mbps, 1000 * 1000);
 
 	return 0;
 }
