@@ -98,6 +98,7 @@ struct rkisp1_device {
 	struct rkisp1_pipeline pipe;
 	struct vb2_alloc_ctx *alloc_ctx;
 	atomic_t poweron_cnt;
+	struct iommu_domain *domain;
 };
 
 /* Clean code starts from here */
