@@ -43,6 +43,38 @@
 #include "rk3288-evb-act8846.dts"
 #include <dt-bindings/display/media-bus-format.h>
 
+/ {
+	camera: camera {
+		compatible = "rockchip,ov7251";
+
+		rockchip,powerdown1 = <&gpio5 9 GPIO_ACTIVE_HIGH>;
+		rockchip,reset1 = <&gpio6 8 GPIO_ACTIVE_HIGH>;
+
+		rockchip,powerdown0 = <&gpio5 8 GPIO_ACTIVE_HIGH>;
+		rockchip,reset0 = <&gpio6 7 GPIO_ACTIVE_HIGH>;
+
+		clocks = <&cru SCLK_VIP_OUT>,
+		<&cru DCLK_VOP0>, <&cru ACLK_VIP>, <&cru HCLK_VIP>,
+		<&cru PCLK_ISP_IN>, <&cru PCLK_ISP_IN>,
+		<&cru PCLK_ISP_IN>, <&cru SCLK_MIPIDSI_24M>,
+		<&cru PCLK_MIPI_CSI>;
+
+		clock-names = "mclk",  "pd_cif0", "aclk_cif0",
+			"hclk_cif0", "cif0_in", "g_pclkin_cif",
+			"cif0_out", "clk_mipi_24m", "hclk_mipiphy1";
+		status = "okay";
+
+		port {
+			ov7251_out0: endpoint@0 {
+				remote-endpoint = <&sensor_in0>;
+			};
+			ov7251_out1: endpoint@1 {
+				remote-endpoint = <&sensor_in1>;
+			};
+		};
+	};
+};
+
 &edp {
 	status = "disabled";
 	vcc-supply = <&vdd10_lcd>;
@@ -314,6 +346,13 @@
 				data-lanes = <1>;
 				link-frequencies =
 					/bits/ 64 <1000000000>;
+			};
+			sensor_in0: endpoint@0 {
+				remote-endpoint = <&ov7251_out0>;
+			};
+
+			sensor_in1: endpoint@1 {
+				remote-endpoint = <&ov7251_out1>;
 			};
 		};
 	};
