@@ -278,3 +278,104 @@
 		max-y = <1920>;
 	};
 };
+
+&cif_isp0 {
+	status = "okay";
+};
+
+&spi0 {
+	status = "okay";
+	max-freq = <48000000>;
+
+	spi_rk1608@00 {
+		compatible =  "rockchip,rk1608";
+		reg = <0>;
+		status = "okay";
+		spi-max-frequency = <24000000>;
+		spi-min-frequency = <12000000>;
+		is_front = <1>;
+		clocks = <&cru SCLK_SPI0>;
+		clock-names = "mclk";
+		orientation = <0>;
+
+		reset-gpio = <&gpio6 0 GPIO_ACTIVE_HIGH>;
+		irq-gpio = <&gpio6 2 GPIO_ACTIVE_HIGH>;
+		sleepst-gpio = <&gpio6 1 GPIO_ACTIVE_HIGH>;
+		wakeup-gpio = <&gpio6 4 GPIO_ACTIVE_HIGH>;
+		powerdown-gpio = <&gpio8 0 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&rk1608_irq_gpios &rk1608_wake_gpios
+			     &rk1608_sleep_gpios>;
+
+		port {
+			sensor_out: endpoint {
+				remote-endpoint = <&isp_mipi_in>;
+				data-lanes = <1>;
+				link-frequencies =
+					/bits/ 64 <1000000000>;
+			};
+		};
+	};
+};
+
+&mipi_phy_rx0 {
+	bus-width = <2>;
+	status = "okay";
+
+	port {
+		isp_mipi_in: endpoint {
+			remote-endpoint = <&sensor_out>;
+				data-lanes = <1>;
+				link-frequencies =
+					/bits/ 64 <1000000000>;
+		};
+	};
+};
+
+&pinctrl {
+	rk1608_irq_gpios {
+		rk1608_irq_gpios: rk1608_irq_gpios {
+			rockchip,pins = <6 2 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pull = <1>;
+		};
+	};
+
+	rk1608_wake_gpios {
+		rk1608_wake_gpios: rk1608_wake_gpios {
+			rockchip,pins = <6 4 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pull = <1>;
+		};
+	};
+
+	rk1608_sleep_gpios {
+		rk1608_sleep_gpios: rk1608_sleep_gpios {
+			rockchip,pins = <6 1 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pull = <1>;
+			rockchip,drive = <0>;
+		};
+	};
+
+	pcfg_pull_none_8ma: pcfg-pull-none-8ma {
+		bias-disable;
+		drive-strength = <8>;
+	};
+
+	spi0 {
+		spi0_clk: spi0-clk {
+			rockchip,pins = <5 12 RK_FUNC_1 &pcfg_pull_none_8ma>;
+		};
+		spi0_cs0: spi0-cs0 {
+			rockchip,pins = <5 13 RK_FUNC_1 &pcfg_pull_none_8ma>;
+		};
+		spi0_tx: spi0-tx {
+			rockchip,pins = <5 14 RK_FUNC_1 &pcfg_pull_none_8ma>;
+		};
+		spi0_rx: spi0-rx {
+			rockchip,pins = <5 15 RK_FUNC_1 &pcfg_pull_none_8ma>;
+		};
+		spi0_cs1: spi0-cs1 {
+			rockchip,pins = <5 16 RK_FUNC_1 &pcfg_pull_none_8ma>;
+		};
+	};
+};
