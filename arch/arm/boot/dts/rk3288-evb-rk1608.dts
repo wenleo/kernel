@@ -266,9 +266,37 @@
 	};
 };
 
+#define LINK_FREQ			400000000
+
 &i2c1 {
 	status = "okay";
 
+	camera0: camera0@1a {
+		compatible = "camera,imx298";
+		reg = <0x1a>;
+		status = "okay";
+		cam_name = "imx298";
+		cam_id = /bits/ 8 <0>;
+		data_type = /bits/ 8 <0x2b>;
+		in_mipi =  /bits/ 8 <2>;
+		out_mipi = /bits/ 8 <1>;
+		field =  /bits/ 8 <1>;
+		colorspace = /bits/ 8 <8>;
+		mipi_lane = /bits/ 8 <4>;
+		i2c_bus = /bits/ 8 <1>;
+		code = /bits/ 16 <MEDIA_BUS_FMT_SRGGB10_1X10>;
+		width = /bits/ 16 <2304>;
+		height= /bits/ 16 <1728>;
+		htotal = /bits/ 16 <2636>;
+		vtotal = /bits/ 16 <2000>;
+		mipi_clock = <LINK_FREQ>;
+		port {
+			sensor_out0: endpoint@0 {
+				remote-endpoint = <&sensor_in0>;
+			};
+
+		};
+	};
 /*
 	camera1: camera1@60 {
 		compatible = "rk1608,camera";
@@ -364,6 +392,9 @@
 			sensor_out: endpoint {
 				remote-endpoint = <&isp_mipi_in>;
 				data-lanes = <1 2 3 4>;
+			};
+			sensor_in0: endpoint@0 {
+				remote-endpoint = <&sensor_out0>;
 			};
 		};
 	};
